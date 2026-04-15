@@ -1,113 +1,91 @@
 ---
 description: |
-  Pre-deployment code review workflow. Before any deployment is triggered,
-  this workflow performs automated code analysis and requires explicit human
-  approval via a PR comment before the deployment label is applied.
+  Reviews incoming pull requests for code quality, security issues, and deployment
+  readiness. Automatically triggered on PR open and update. Posts a structured
+  review report and labels the PR. Requires human approval via /approve-deploy
+  comment before deployment can proceed.
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
-  workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
+  pull-requests: read
 
 network: defaults
 
 tools:
   github:
     lockdown: false
+    toolsets: [pull_requests, repos]
     min-integrity: none
 
 safe-outputs:
-  mentions: false
-  allowed-github-references: []
-  add-label:
-    allowed-labels:
-      - "review: pending"
-      - "review: approved"
-      - "review: blocked"
-  create-pr-comment: {}
+  add-labels:
+    allowed: [review-pending, review-approved, review-blocked]
+    max: 1
+  add-comment:
+    max: 1
 
-human-in-the-loop:
-  enabled: true
-  approval-required: true
-  timeout: 48h
-  trigger-comment: "/approve-deploy"
-  reject-comment: "/block-deploy"
-
-source: githubnext/agentics/workflows/pre-deploy-review.md
+timeout-minutes: 10
 ---
 
 # Pre-Deployment Code Review
 
-在每次 PR 合并到主分支、触发部署之前，对本次变更进行全面代码审查，并**等待人工确认**后才能放行部署。
+You are a senior code reviewer. Your job is to review pull request #${{ github.event.pull_request.number }} before it is deployed to production.
 
-## 审查步骤
+## Step 1: Fetch PR Details
 
-### Step 1：分析变更内容
-- 列出本次 PR 所有变更文件
-- 识别高风险改动类型：
-  - 数据库 migration 文件
-  - 环境变量 / secrets 配置文件（`*.env*`）
-  - 依赖版本变更（`package.json`、`requirements.txt`、`go.mod` 等）
-  - CI/CD pipeline 文件（`.github/` 目录）
-  - 权限与认证相关代码（auth、rbac、middleware）
-  - 对外 API 接口变更
+Get the pull request details for PR #${{ github.event.pull_request.number }} in repository `${{ github.repository }}`:
+- List all changed files and their diffs
+- Read the PR title and description
 
-### Step 2：代码质量检查
-- 检查是否存在明显 bug 或逻辑错误
-- 检查是否有安全隐患（硬编码密钥、SQL 注入、未校验输入）
-- 评估测试覆盖情况（是否有对应单测或 E2E 测试）
-- 确认变更是否符合项目既有代码规范
+## Step 2: Analyze the Changes
 
-### Step 3：生成结构化审查报告
-在 PR 中发布一条评论，格式如下：
+Review all changed files for:
+
+**Security risks:**
+- Hardcoded secrets, API keys, or passwords
+- SQL injection or command injection vulnerabilities
+- Unvalidated user input
+
+**High-risk change types:**
+- Environment config files (`*.env`, `config/*`)
+- Database migration files
+- Dependency changes (`package.json`, `requirements.txt`, `go.mod`)
+- CI/CD pipeline files (`.github/` directory)
+- Authentication or permission-related code
+
+**Code quality:**
+- Obvious bugs or logic errors
+- Missing error handling
+- Test coverage for the changed code
+
+## Step 3: Post Review Report
+
+Post a single PR comment with this structure:
 
 ```
-## 🔍 Pre-Deploy Code Review Report
+## 🔍 Pre-Deploy Code Review
 
-**风险等级：** 低 / 中 / 高
+**Risk Level:** 🟢 Low / 🟡 Medium / 🔴 High
 
-### ✅ 通过项
-- （列出审查通过的内容）
+### ✅ Passed
+- (list passed checks)
 
-### ⚠️ 需关注项（不阻塞部署，建议后续修复）
-- （列出需关注但不阻塞的内容）
+### ⚠️ Warnings (non-blocking)
+- (list non-blocking concerns, or "None")
 
-### ❌ 阻塞项（必须修复后才可部署）
-- （列出必须修复的问题，如有）
+### ❌ Blockers (must fix before deploy)
+- (list blockers, or "None")
 
 ---
-**如需批准部署，请审批人在评论中回复：** `/approve-deploy`
-**如需阻塞部署，请回复：** `/block-deploy reason=<原因>`
+**Next step:** Reply `/approve-deploy` to approve deployment, or `/block-deploy reason=<reason>` to block it.
 ```
 
-### Step 4：根据审查结果打标签
-- 如果存在"阻塞项" → 打上 `review: blocked` 标签，**停止流程，等待修复**
-- 如果无阻塞项 → 打上 `review: pending` 标签，等待人工批准
+## Step 4: Apply Label
 
-### Step 5：等待人工确认
-- 监听 PR 评论
-- 当检测到授权审批人发出 `/approve-deploy` 评论时：
-  - 将标签从 `review: pending` 更新为 `review: approved`
-  - 在 PR 中回复确认信息，包含：审批人、审批时间
-  - **此时部署流程可以继续**
-- 当检测到 `/block-deploy` 评论时：
-  - 将标签更新为 `review: blocked`
-  - 记录阻塞原因
-
-## 部署放行条件
-
-**只有同时满足以下条件，才允许触发部署：**
-1. PR 带有 `review: approved` 标签
-2. 所有 CI 检查通过
-3. 无未解决的阻塞项评论
-
-## 备注
-
-- 审批超时时间：48 小时（超时后需重新触发审查）
-- 每次新的 commit push 后，审查状态自动重置为 `review: pending`
-- 审查报告和审批记录将保留在 PR 评论历史中，便于追溯
+Based on your findings:
+- If there are **blockers** → add label `review-blocked`
+- If there are **no blockers** → add label `review-pending`
